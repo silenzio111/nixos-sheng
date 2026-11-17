@@ -9,15 +9,25 @@ let
       if pgrep -x wvkbd-mobintl >/dev/null; then
         pkill -RTMIN -x wvkbd-mobintl
       else
-        wvkbd-mobintl &
+        wvkbd-mobintl -H 320 -L 260 &
       fi
     '';
   };
   desktop = pkgs.writeShellScript "sheng-hyprland-session" ''
+    set -eu
+    # The first user's home can be created before /etc/skel is populated.
+    # Seed missing files before Hyprland can generate its default config.
+    configHome="''${XDG_CONFIG_HOME:-$HOME/.config}"
+    for relative in hypr/hyprland.lua waybar/config.jsonc waybar/style.css wofi/config; do
+      if [ ! -e "$configHome/$relative" ]; then
+        ${pkgs.coreutils}/bin/install -Dm644 \
+          "/etc/skel/.config/$relative" "$configHome/$relative"
+      fi
+    done
     export XDG_CURRENT_DESKTOP=Hyprland
     export XDG_SESSION_DESKTOP=Hyprland
     export XDG_SESSION_TYPE=wayland
-    exec ${pkgs.dbus}/bin/dbus-run-session ${config.programs.hyprland.package}/bin/Hyprland
+    exec ${pkgs.uwsm}/bin/uwsm start -e -D Hyprland -- hyprland.desktop
   '';
 in
 {
@@ -49,6 +59,7 @@ in
   hardware.graphics.enable = true;
   programs.hyprland.enable = true;
   programs.hyprland.xwayland.enable = true;
+  programs.hyprland.withUWSM = true;
   security.polkit.enable = true;
   security.rtkit.enable = true;
   programs.dconf.enable = true;
@@ -58,7 +69,10 @@ in
     enable = true;
     settings = {
       initial_session = { command = "${desktop}"; inherit user; };
-      default_session = { command = "${desktop}"; inherit user; };
+      default_session = {
+        command = "${pkgs.greetd}/bin/agreety --cmd ${desktop}";
+        user = "greeter";
+      };
     };
   };
   services.pulseaudio.enable = false;
@@ -82,86 +96,17 @@ in
     jq libinput usbutils
   ];
 
-  environment.etc."skel/.config/hypr/hyprland.conf".text = ''
-    monitor = ,preferred,auto,2
-    monitor = DSI-1,3048x2032@120,auto,2
-    $mod = SUPER
-    exec-once = dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
-    exec-once = waybar
-    exec-once = nm-applet --indicator
-    exec-once = blueman-applet
-    exec-once = ${pkgs.polkit_gnome}/libexec/polkit-gnome-authentication-agent-1
-    env = XCURSOR_SIZE,32
-    env = HYPRCURSOR_SIZE,32
-    env = QT_QPA_PLATFORM,wayland;xcb
-    env = QT_AUTO_SCREEN_SCALE_FACTOR,1
-    env = MOZ_ENABLE_WAYLAND,1
-    input {
-      kb_layout = us
-      follow_mouse = 1
-      touchpad {
-        natural_scroll = true
-        tap-to-click = true
-      }
-      touchdevice {
-        output = DSI-1
-      }
-    }
-    general {
-      gaps_in = 4
-      gaps_out = 8
-      border_size = 2
-      col.active_border = rgb(89b4fa)
-      col.inactive_border = rgb(45475a)
-      layout = dwindle
-    }
-    decoration {
-      rounding = 12
-      blur {
-        enabled = false
-      }
-    }
-    animations {
-      enabled = false
-    }
-    misc {
-      disable_hyprland_logo = true
-      disable_splash_rendering = true
-    }
-    dwindle {
-      preserve_split = true
-    }
-    bind = $mod, Return, exec, foot
-    bind = $mod, D, exec, wofi --show drun
-    bind = $mod, Q, killactive,
-    bind = $mod, F, fullscreen,
-    bind = $mod, V, togglefloating,
-    bind = $mod, K, exec, sheng-keyboard
-    bind = $mod, E, exec, thunar
-    bind = $mod, B, exec, firefox
-    bind = $mod, 1, workspace, 1
-    bind = $mod, 2, workspace, 2
-    bind = $mod, 3, workspace, 3
-    bind = $mod, 4, workspace, 4
-    bind = $mod SHIFT, 1, movetoworkspace, 1
-    bind = $mod SHIFT, 2, movetoworkspace, 2
-    bind = $mod SHIFT, 3, movetoworkspace, 3
-    bind = $mod SHIFT, 4, movetoworkspace, 4
-    bindm = $mod, mouse:272, movewindow
-    bindm = $mod, mouse:273, resizewindow
-    bindel = , XF86AudioRaiseVolume, exec, wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+
-    bindel = , XF86AudioLowerVolume, exec, wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
-    bindl = , XF86AudioMute, exec, wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
-    bindel = , XF86MonBrightnessUp, exec, brightnessctl set +5%
-    bindel = , XF86MonBrightnessDown, exec, brightnessctl set 5%-
-  '';
+  environment.etc."skel/.config/hypr/hyprland.lua".text =
+    builtins.replaceStrings [ "@POLKIT_AGENT@" ]
+      [ "${pkgs.polkit_gnome}/libexec/polkit-gnome-authentication-agent-1" ]
+      (builtins.readFile ./hyprland.lua);
   environment.etc."skel/.config/waybar/config.jsonc".text = builtins.toJSON {
     layer = "top";
     height = 44;
     spacing = 8;
     "modules-left" = [ "custom/launcher" "hyprland/workspaces" "custom/terminal" "custom/keyboard" ];
     "modules-center" = [ "clock" ];
-    "modules-right" = [ "network" "bluetooth" "pulseaudio" "backlight" "battery" "custom/power" ];
+    "modules-right" = [ "tray" "network" "bluetooth" "pulseaudio" "backlight" "battery" "custom/power" ];
     "custom/launcher" = { format = " Apps "; "on-click" = "wofi --show drun"; };
     "custom/terminal" = { format = " Terminal "; "on-click" = "foot"; };
     "custom/keyboard" = { format = " Keyboard "; "on-click" = "sheng-keyboard"; };
