@@ -1,0 +1,81 @@
+name: Build personal Sheng Hyprland
+on:
+  push:
+    branches: [codex/sheng-hyprland]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sheng-personal-hyprland
+  cancel-in-progress: true
+jobs:
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            keep-outputs = true
+      - name: Restore Nix cache
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: sheng-hyprland-${{ hashFiles('flake.lock', '**/*.nix') }}
+          restore-prefixes-first-match: sheng-hyprland-
+          gc-max-store-size-linux: 12G
+      - name: Set personal login password
+        env:
+          PASSWORD_HASH: ${{ secrets.SHENG_USER_PASSWORD_HASH }}
+        run: |
+          set -euo pipefail
+          test -n "$PASSWORD_HASH"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = os.environ["PASSWORD_HASH"]
+          assert value.startswith("$6$")
+          Path("personal/password.nix").write_text(
+              "{ hashedPassword = " + json.dumps(value) + "; }\n"
+          )
+          PY
+      - name: Seed verified upstream kernel and base system
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download 43699495753 --repo Murkiness4095/nixos-sheng \
+            --name sheng-system-closure --dir seed-system
+          (cd seed-system && sha256sum -c SHA256SUMS)
+          archive=$(find seed-system -name '*.nar.zst' -print -quit)
+          zstd -dc "$archive" | sudo "$(command -v nix-store)" --import > /tmp/imported-paths
+      - name: Evaluate image and USB specialisation
+        run: |
+          set -euo pipefail
+          nix eval --raw .#nixosConfigurations.sheng-hyprland.config.system.build.toplevel.drvPath
+          test "$(nix eval --raw .#nixosConfigurations.sheng-hyprland.config.sheng.rootfs.partlabel)" = userdata
+          test "$(nix eval --json .#nixosConfigurations.sheng-hyprland.config.programs.hyprland.enable)" = true
+          test "$(nix eval --json .#nixosConfigurations.sheng-hyprland.config.specialisation.daily.configuration.services.shengSerialConsole.enable)" = false
+      - name: Build boot image and Hyprland rootfs
+        run: |
+          set -euo pipefail
+          nix build -L .#u-boot -o result-uboot
+          nix build -L .#nixos-hyprland -o result-hyprland
+      - name: Pack and verify artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp result-uboot/boot.img artifacts/sheng-boot.img
+          zstd -T0 -3 result-hyprland/sheng-rootfs.sparse.img \
+            -o artifacts/sheng-rootfs-hyprland.sparse.img.zst
+          nix eval --raw .#nixosConfigurations.sheng-hyprland.config.system.build.toplevel > artifacts/system-path.txt
+          nix eval --raw .#nixosConfigurations.sheng-hyprland.config.boot.kernelPackages.kernel.outPath > artifacts/kernel-path.txt
+          git rev-parse HEAD > artifacts/revision.txt
+          cp flake.lock artifacts/flake.lock
+          (cd artifacts && sha256sum sheng-boot.img sheng-rootfs-hyprland.sparse.img.zst > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sheng-hyprland-flashable
+          path: artifacts/
+          retention-days: 14

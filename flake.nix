@@ -266,6 +266,9 @@
       nixosConfigurations.sheng-dual = shengDual;
       nixosConfigurations.sheng-kde = shengKde;
       nixosConfigurations.sheng-gnome = shengGnome;
+      nixosConfigurations.sheng-hyprland = sheng.extendModules {
+        modules = [ ./personal/hyprland.nix ];
+      };
       nixosConfigurations.sheng-dual-kde = shengDualKde;
       nixosConfigurations.sheng-dual-gnome = shengDualGnome;
       # Opt-in stage-1 validation target. The normal image outputs retain
@@ -296,6 +299,7 @@
             nixos-dual = shengDual.config.system.build.shengImage;
             nixos-kde = shengKde.config.system.build.shengImage;
             nixos-gnome = shengGnome.config.system.build.shengImage;
+            nixos-hyprland = self.nixosConfigurations.sheng-hyprland.config.system.build.shengImage;
             nixos-dual-kde = shengDualKde.config.system.build.shengImage;
             nixos-dual-gnome = shengDualGnome.config.system.build.shengImage;
 
